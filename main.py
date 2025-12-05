@@ -9,7 +9,7 @@ import time             # Time operations
 
 # Configure the Streamlit page
 st.set_page_config(page_title="Invisibility Cloak", layout="centered")
-st.title("🧙 Invisibility Cloak - Streamlit Edition")
+st.title("🧙 Invisibility Cloak - Harry Potter Edition")
 
 # WebRTC configuration for video streaming
 RTC_CONFIGURATION = RTCConfiguration(
