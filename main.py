@@ -1,72 +1,83 @@
-import cv2
+import streamlit as st
 import numpy as np
-import time
+import cv2
+import av
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
-def create_background(cap, num_frames=30):
-    print("Capturing background. Please move out of frame.")
-    backgrounds = []
-    for i in range(num_frames):
-        ret, frame = cap.read()
-        if ret:
-            backgrounds.append(frame)
-        else:
-            print(f"Warning: Could not read frame {i+1}/{num_frames}")
-        time.sleep(0.1)
-    if backgrounds:
-        return np.median(backgrounds, axis=0).astype(np.uint8)
-    else:
-        raise ValueError("Could not capture any frames for background")
 
-def create_mask(frame, lower_color, upper_color):
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, lower_color, upper_color)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=2)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_DILATE, np.ones((3, 3), np.uint8), iterations=1)
-    return mask
+st.set_page_config(page_title="Invisibility Cloak", layout="centered")
+st.title("🧙 Invisibility Cloak - Streamlit Edition")
 
-def apply_cloak_effect(frame, mask, background):
-    mask_inv = cv2.bitwise_not(mask)
-    fg = cv2.bitwise_and(frame, frame, mask=mask_inv)
-    bg = cv2.bitwise_and(background, background, mask=mask)
-    return cv2.add(fg, bg)
 
-def main():
-    print("OpenCV version:", cv2.__version__)
+# RTC Configuration (required for Streamlit Cloud)
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
 
-    cap = cv2.VideoCapture(0)
 
-    if not cap.isOpened():
-        print("Error: Could not open camera.")
-        return
+# -------------------
+# Video Processor
+# -------------------
+class CloakProcessor(VideoProcessorBase):
+    def __init__(self):
+        self.background = None
+        self.frames_captured = 0
+        self.background_frames_needed = 40
 
-    try:
-        background = create_background(cap)
-    except ValueError as e:
-        print(f"Error: {e}")
-        cap.release()
-        return
+        # HSV range for BLUE color cloak
+        self.lower_blue = np.array([90, 50, 50])
+        self.upper_blue = np.array([130, 255, 255])
 
-    lower_blue = np.array([90, 50, 50])
-    upper_blue = np.array([130, 255, 255])
+    def capture_background(self, frame):
+        """Accumulate frames for background median estimation."""
+        if self.background is None:
+            self.background = []
 
-    print("Starting main loop. Press 'q' to quit.")
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("Error: Could not read frame.")
-            time.sleep(1)
-            continue
+        self.background.append(frame)
+        self.frames_captured += 1
 
-        mask = create_mask(frame, lower_blue, upper_blue)
-        result = apply_cloak_effect(frame, mask, background)
+        if self.frames_captured == self.background_frames_needed:
+            self.background = np.median(self.background, axis=0).astype(np.uint8)
+            print("Background captured!")
 
-        cv2.imshow('Invisible Cloak', result)
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        # Capture background for first 40 frames
+        if isinstance(self.background, list):
+            self.capture_background(img)
+            return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-    cap.release()
-    cv2.destroyAllWindows()
+        # Convert to HSV
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-if __name__ == "__main__":
-    main()
+        # Mask for cloak color
+        mask = cv2.inRange(hsv, self.lower_blue, self.upper_blue)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=2)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_DILATE, np.ones((3, 3), np.uint8), iterations=1)
+
+        mask_inv = cv2.bitwise_not(mask)
+
+        # Foreground (everything except cloak)
+        fg = cv2.bitwise_and(img, img, mask=mask_inv)
+
+        # Background replace
+        bg = cv2.bitwise_and(self.background, self.background, mask=mask)
+
+        # Final output
+        final = cv2.add(fg, bg)
+
+        return av.VideoFrame.from_ndarray(final, format="bgr24")
+
+
+# -------------------
+# Streamlit UI
+# -------------------
+st.info("Stand still for 3 seconds so the app can capture your background.")
+
+webrtc_streamer(
+    key="cloak",
+    video_processor_factory=CloakProcessor,
+    rtc_configuration=RTC_CONFIGURATION,
+    media_stream_constraints={"video": True, "audio": False},
+)
